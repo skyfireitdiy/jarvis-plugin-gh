@@ -143,3 +143,24 @@ test("useCurrentDirRepo 清除本地目录状态", () => {
     "useCurrentDirRepo 应清除本地目录持久化",
   );
 });
+// 回归：callFunction 的 noRepoFns 豁免名单必须包含 use_local_dir。
+// 否则 use_local_dir 会被自动注入 repo 参数（后端签名是 (local_dir, platform)，
+// 不接受 repo），导致 TypeError: use_local_dir() got an unexpected keyword
+// argument 'repo'。此用例防止豁免名单被误改。
+test("callFunction 豁免名单包含 use_local_dir（防止 repo 被误注入）", async () => {
+  const fs = await import("node:fs/promises");
+  const src = await fs.readFile(
+    new URL("../frontend/sidebar_view.js", import.meta.url),
+    "utf8",
+  );
+  const m = src.match(/const noRepoFns = \[([^\]]+)\]/);
+  assert.ok(m, "应能匹配到 noRepoFns 声明");
+  assert.ok(
+    m[1].includes("use_local_dir"),
+    "noRepoFns 应包含 use_local_dir，避免 use_local_dir 被注入 repo 参数",
+  );
+  assert.ok(
+    m[1].includes("resolve_repo"),
+    "noRepoFns 应包含 resolve_repo",
+  );
+});

@@ -85,7 +85,8 @@ async function callFunction(functionName, args, nodeId, platform) {
     (typeof window !== "undefined" && window.__jarvisFetch) || fetch;
   // 除 resolve_repo 外，其余函数都需指定 repo；未解析到仓库时传空，
   // 由后端返回明确错误提示。
-  const noRepoFns = ["resolve_repo", "auth_status", "auth_login"];
+  // use_local_dir 通过 local_dir 解析仓库，不接受 repo 参数，也加入豁免。
+  const noRepoFns = ["resolve_repo", "auth_status", "auth_login", "use_local_dir"];
   const callArgs = args || {};
   if (!noRepoFns.includes(functionName) && !callArgs.repo) {
     callArgs.repo = currentRepo;
