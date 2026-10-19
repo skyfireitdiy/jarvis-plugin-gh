@@ -985,6 +985,137 @@ def resolve_repo(
     }
 
 
+def use_local_dir(
+    local_dir: Optional[str] = None, platform: Optional[str] = None
+) -> Dict[str, Any]:
+    """使用本地已 clone 的 git 目录作为目标仓库（跳过 Fork + Clone）。
+
+    校验该目录是 git 仓库且能解析出 origin remote（复用 gh_common 的
+    resolve_repo_from_dir / resolve_platform_from_dir），返回其对应的
+    owner/repo 与平台，供后续所有 issue/PR 操作使用。
+
+    返回 {"success": True, "repo": str, "platform": str, "local_dir": str}；
+    目录不存在 / 非 git 仓库 / 无 origin remote 时返回 {"success": False, "error": str}。
+    """
+    local_dir = (local_dir or "").strip()
+    if not local_dir:
+        return {"success": False, "error": "请提供本地目录路径（local_dir）"}
+    if not os.path.isdir(local_dir):
+        return {"success": False, "error": f"本地目录不存在: {local_dir}"}
+
+    repo = gh_common.resolve_repo_from_dir(local_dir)
+    if not repo:
+        return {
+            "success": False,
+            "error": f"该目录不是 git 仓库或缺少 origin remote: {local_dir}",
+        }
+    detected = gh_common.resolve_platform_from_dir(local_dir)
+    # 显式指定平台优先；auto/None 时按 remote 识别
+    p_raw = (platform or "").strip().lower()
+    if p_raw in ("gitee", "gitee.com"):
+        p = "gitee"
+    elif p_raw == "github":
+        p = "github"
+    else:
+        p = detected
+    return {
+        "success": True,
+        "repo": repo,
+        "platform": p,
+        "local_dir": local_dir,
+    }
+
+
+def check_repo_permission(
+    repo: Optional[str] = None, platform: Optional[str] = None
+) -> Dict[str, Any]:
+    """检查当前登录账号对指定仓库是否有写权限。
+
+    - github：`gh api repos/{repo}` 的 permissions.push
+    - gitee：`gitee api /repos/{repo}` 的 permissions.push
+    未登录时返回 {"success": True, "has_write": False, "authenticated": False}。
+    返回 {"success": True, "has_write": bool, "authenticated": bool, "login": str}。
+    """
+    repo, _repo_err = _require_repo(repo)
+    if _repo_err:
+        return {"success": False, "error": _repo_err}
+    platform = gh_common.normalize_platform(platform)
+
+    login = _current_login(platform)
+    if not login:
+        return {
+            "success": True,
+            "has_write": False,
+            "authenticated": False,
+            "login": "",
+            "platform": platform,
+        }
+
+    if platform == "gitee":
+        resp = gh_common.cli_json("gitee", ["api", f"/repos/{repo}"])
+        if not resp["success"]:
+            return {
+                "success": True,
+                "has_write": False,
+                "authenticated": True,
+                "login": login,
+                "platform": platform,
+                "message": f"查询仓库权限失败: {resp['error']}",
+            }
+        permissions = (resp["data"] or {}).get("permissions") or {}
+        has_write = bool(permissions.get("push"))
+    else:
+        resp = gh_common.cli_json("github", ["api", f"repos/{repo}", "--jq", ".permissions"])
+        if not resp["success"]:
+            return {
+                "success": True,
+                "has_write": False,
+                "authenticated": True,
+                "login": login,
+                "platform": platform,
+                "message": f"查询仓库权限失败: {resp['error']}",
+            }
+        permissions = resp["data"] or {}
+        has_write = bool(permissions.get("push"))
+    return {
+        "success": True,
+        "has_write": has_write,
+        "authenticated": True,
+        "login": login,
+        "platform": platform,
+    }
+
+
+def is_own_repo(
+    repo: Optional[str] = None, platform: Optional[str] = None
+) -> Dict[str, Any]:
+    """判断指定仓库的 owner 是否为当前登录账号（自己的仓库无法 Fork）。
+
+    返回 {"success": True, "is_own": bool, "login": str}；未登录时
+    {"success": True, "is_own": False, "login": ""}（无法判断视为非自己仓库）。
+    """
+    repo, _repo_err = _require_repo(repo)
+    if _repo_err:
+        return {"success": False, "error": _repo_err}
+    platform = gh_common.normalize_platform(platform)
+
+    login = _current_login(platform)
+    if not login:
+        return {
+            "success": True,
+            "is_own": False,
+            "login": "",
+            "platform": platform,
+        }
+    owner = (repo or "").split("/", 1)[0].strip().lower()
+    return {
+        "success": True,
+        "is_own": bool(owner) and owner == login.lower(),
+        "login": login,
+        "platform": platform,
+    }
+
+
 # 可被 gateway 代理调用的函数白名单（防止任意函数被调用）
 PUBLIC_FUNCTIONS: List[str] = [
     "list_issues",
@@ -996,6 +1127,9 @@ PUBLIC_FUNCTIONS: List[str] = [
     "comment",
     "close_issue",
     "resolve_repo",
+    "use_local_dir",
+    "check_repo_permission",
+    "is_own_repo",
     "fork_repo",
     "clone_repo",
     "prepare_issue_repo",

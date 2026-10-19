@@ -15,6 +15,11 @@ let currentRepo = "";
 let manualRepo = "";
 // 记住手动指定的仓库，刷新页面后仍生效（key 按插件固定）。
 const MANUAL_REPO_KEY = "jarvis_gh_manual_repo";
+// 用户指定的本地已 clone 目录（git 仓库，有 origin remote）。非空表示当前目标
+// 仓库来自本地目录（跳过 Fork + Clone），右键显示「在当前目录创建 CodeAgent 处理」。
+// 记住该目录，刷新页面后仍生效（key 按插件固定）。
+let localDir = "";
+const LOCAL_DIR_KEY = "jarvis_gh_local_dir";
 // 最近手动指定过的仓库历史（JSON 数组，最多 10 条，最近使用在前），用于快速选择切换。
 const REPO_HISTORY_KEY = "jarvis_gh_repo_history";
 const REPO_HISTORY_MAX = 10;
@@ -129,6 +134,9 @@ export default {
       repo: currentRepo,
       repoInput: "",
       repoEditing: false,
+      // 本地已 clone 目录输入框内容与当前生效的本地目录（空表示未使用本地目录）
+      localDirInput: "",
+      localDir: localDir,
       // 节点列表与当前节点（master 恒在列）；gh 功能在所选节点本地执行
       nodes: [],
       nodeId: "master",
@@ -138,6 +146,9 @@ export default {
       // Agent 工作目录对应的仓库，此时不应把 issue/PR 交给当前 Agent 处理
       // （Agent 的工作目录属于另一个仓库，gh 命令会在错误仓库上执行）。
       isManualRepo: false,
+      // 是否处于「本地已 clone 目录」仓库：为真表示当前展示的仓库来自用户指定的
+      // 本地 git 目录（跳过 Fork），右键显示「在当前目录创建 CodeAgent 处理」。
+      isLocalDirRepo: false,
       // 最近手动指定过的仓库历史（最多 10 条，最近使用在前），用于快速选择切换。
       repoHistory: [],
       // 当前目标 Agent 名称（宿主 __jarvisGetActiveAgentInfo 提供；无则空）。
@@ -180,6 +191,7 @@ export default {
   mounted() {
     this.initNodes();
     this.restoreManualRepo();
+    this.restoreLocalDir();
     this.restorePlatform();
     this.refreshAgentName();
     this.resolveRepo().then(() => this.refresh());
@@ -286,12 +298,51 @@ export default {
       }
     },
     async resolveRepo() {
+      // 本地已 clone 目录优先：直接以该目录解析出的仓库为目标（跳过 Fork），
+      // 不再被 workingDir 自动解析覆盖。
+      if (localDir) {
+        try {
+          const payload = await callFunction("use_local_dir", {
+            local_dir: localDir,
+            platform: this.platform,
+          }, this.nodeId);
+          if (payload && payload.success && payload.repo) {
+            currentRepo = payload.repo;
+            this.repo = currentRepo;
+            this.repoInput = currentRepo;
+            this.localDir = localDir;
+            if (payload.platform) {
+              currentPlatform = payload.platform;
+              this.platform = payload.platform;
+            }
+            this.isLocalDirRepo = true;
+            this.isManualRepo = false;
+            return;
+          }
+        } catch (e) {
+          // 解析失败：清空仓库并提示（不硬编码默认仓库）
+          currentRepo = "";
+          this.repo = "";
+          this.repoInput = "";
+          this.isLocalDirRepo = false;
+          this.error = String((e && e.message) || e);
+          return;
+        }
+        // 本地目录解析失败（非 git/无 origin）：清空并提示
+        currentRepo = "";
+        this.repo = "";
+        this.repoInput = "";
+        this.isLocalDirRepo = false;
+        this.error = "本地目录不是 git 仓库或缺少 origin remote，请更换目录";
+        return;
+      }
       // 手动指定的仓库优先：不再被 workingDir 自动解析覆盖。
       if (manualRepo) {
         currentRepo = manualRepo;
         this.repo = currentRepo;
         this.repoInput = currentRepo;
         this.isManualRepo = true;
+        this.isLocalDirRepo = false;
         return;
       }
       try {
@@ -314,12 +365,26 @@ export default {
         this.repoInput = "";
       }
       this.isManualRepo = false;
+      this.isLocalDirRepo = false;
     },
     // 从 localStorage 恢复上次手动指定的仓库（刷新页面后仍生效）。
     restoreManualRepo() {
       try {
         const saved = (localStorage.getItem(MANUAL_REPO_KEY) || "").trim();
         if (saved) manualRepo = saved;
+      } catch {
+        /* localStorage 不可用时忽略 */
+      }
+    },
+    // 从 localStorage 恢复上次指定的本地目录（刷新页面后仍生效）。
+    restoreLocalDir() {
+      try {
+        const saved = (localStorage.getItem(LOCAL_DIR_KEY) || "").trim();
+        if (saved) {
+          localDir = saved;
+          this.localDir = saved;
+          this.localDirInput = saved;
+        }
       } catch {
         /* localStorage 不可用时忽略 */
       }
@@ -425,6 +490,16 @@ export default {
       this.repo = normalized;
       this.repoInput = normalized;
       this.isManualRepo = true;
+      this.isLocalDirRepo = false;
+      // 手动指定仓库后，本地目录不再生效（清除持久化）
+      localDir = "";
+      this.localDir = "";
+      this.localDirInput = "";
+      try {
+        localStorage.removeItem(LOCAL_DIR_KEY);
+      } catch {
+        /* 忽略 */
+      }
       this.repoEditing = false;
       this.refresh();
     },
@@ -436,13 +511,93 @@ export default {
     // 恢复为「跟随当前工作目录」自动解析的仓库。
     useCurrentDirRepo() {
       manualRepo = "";
+      localDir = "";
+      this.localDir = "";
+      this.localDirInput = "";
       try {
         localStorage.removeItem(MANUAL_REPO_KEY);
+        localStorage.removeItem(LOCAL_DIR_KEY);
       } catch {
         /* 忽略 */
       }
       this.repoEditing = false;
       this.resolveRepo().then(() => this.refresh());
+    },
+    // 使用本地已 clone 的 git 目录作为目标仓库（跳过 Fork + Clone）。
+    // 校验该目录是 git 仓库且有 origin remote，解析出 owner/repo 与平台后
+    // 作为当前目标仓库；非 git 目录/无 origin 时给出明确错误。
+    async useLocalDir() {
+      const dir = (this.localDirInput || "").trim();
+      if (!dir) {
+        this.error = "请填写本地目录路径，或点击「选择目录」";
+        return;
+      }
+      this.busy = true;
+      this.message = "";
+      this.error = "";
+      try {
+        const payload = await callFunction("use_local_dir", {
+          local_dir: dir,
+          platform: this.platform,
+        }, this.nodeId);
+        if (!payload || !payload.success || !payload.repo) {
+          this.error = (payload && payload.error) || "本地目录解析失败";
+          return;
+        }
+        // 解析成功：设为当前目标仓库并持久化本地目录
+        localDir = dir;
+        this.localDir = dir;
+        this.localDirInput = dir;
+        try {
+          localStorage.setItem(LOCAL_DIR_KEY, dir);
+        } catch {
+          /* 忽略 */
+        }
+        manualRepo = "";
+        try {
+          localStorage.removeItem(MANUAL_REPO_KEY);
+        } catch {
+          /* 忽略 */
+        }
+        currentRepo = payload.repo;
+        this.repo = payload.repo;
+        this.repoInput = payload.repo;
+        if (payload.platform) {
+          currentPlatform = payload.platform;
+          this.platform = payload.platform;
+        }
+        this.isLocalDirRepo = true;
+        this.isManualRepo = false;
+        this.repoEditing = false;
+        this.message = `已使用本地目录 ${dir}（${payload.repo}）`;
+        this.refresh();
+      } catch (e) {
+        this.error = String((e && e.message) || e);
+      } finally {
+        this.busy = false;
+      }
+    },
+    // 选择本地已 clone 目录（复用宿主目录选择通道，返回路径+节点）。
+    async pickLocalDir() {
+      const pick =
+        typeof window !== "undefined" && window.__jarvisPickDirectoryWithNode;
+      if (typeof pick !== "function") {
+        this.error = "宿主未提供目录选择通道，请手动填写本地目录路径";
+        return;
+      }
+      try {
+        const picked = await pick();
+        if (!picked || !picked.path) {
+          return;
+        }
+        this.localDirInput = picked.path;
+        // 目录选择带节点时，同步切换目标节点（该目录所在节点）
+        if (picked.nodeId) {
+          this.onNodeChange(picked.nodeId);
+        }
+      } catch (e) {
+        this.error = String((e && e.message) || e);
+      }
     },
     toggleRepoEdit() {
       this.repoEditing = !this.repoEditing;
@@ -602,6 +757,27 @@ export default {
           "6. 写操作（评论/关闭/合并）前先与我确认，再执行。",
         ].join("\n");
         return [head, "", upstream, "", flow].join("\n");
+      }
+      if (this.isLocalDirRepo) {
+        // 本地已 clone 目录仓库：当前目录就是目标仓库（跳过 Fork），
+        // 目标是直接改代码 + 提交 + 推送（无需 fork/upstream）。
+        const head = `请处理 ${platformName} ${isIssue ? "Issue" : "Pull Request"} #${number}：${title}`;
+        const local = [
+          `目标仓库 ${repo} 的本地 clone 目录就是当前工作目录（origin 指向 ${repo}）。`,
+          "目标是：在当前目录直接修改代码修复问题，提交并推送。",
+          "请先确认当前目录与目标仓库一致（git remote -v 查看 origin），再开始改动。",
+        ].join("\n");
+        const flow = [
+          "处理流程：",
+          `1. 先确认当前工作目录对应目标仓库 ${repo}（\`git remote get-url origin\` 校验），并确认当前分支。`,
+          "2. 从主干切出特性分支：`git checkout -b fix/issue-<编号>`（或按仓库约定命名）。",
+          "3. 在分支上完成改动，遵循相关开发规则（含测试）。",
+          "4. 用 `commit` 工具生成正式提交。",
+          `5. 推送分支：\`git push origin <分支名>\`。`,
+          `6. 创建 PR：\`${cli} pr create --repo ${repo} --head <分支名> --base <主干> --title <标题>\`，并在描述中用 \`Closes #${number}\` 关联该 Issue。`,
+          "7. 写操作（评论/关闭/合并）前先与我确认，再执行。",
+        ].join("\n");
+        return [head, "", local, "", flow].join("\n");
       }
       return isIssue
         ? [
@@ -833,6 +1009,59 @@ export default {
         this.busy = false;
       }
     },
+    // 本地已 clone 目录仓库：直接在该目录创建 CodeAgent 处理（跳过 Fork）。
+    // working_dir 指向该本地目录，task 按「当前仓库直接改代码 + 提交 + 推送」流程。
+    async handleItemLocalDirAgent(item) {
+      this.closeItemMenu();
+      if (!item) return;
+      const dir = (this.localDir || "").trim();
+      if (!dir) {
+        this.message = "失败: 未解析到本地目录";
+        return;
+      }
+      const number = item.number;
+      const isIssue = this.tab === "issues";
+      const kind = isIssue ? "Issue" : "Pull Request";
+      // 优先使用「打开创建 Agent 弹窗（带预填）」通道；宿主未提供时回退到直接创建通道。
+      const openModal =
+        typeof window !== "undefined" && window.__jarvisOpenCreateAgentModal;
+      const create =
+        typeof window !== "undefined" && window.__jarvisCreateAgentForTask;
+      if (typeof openModal !== "function" && typeof create !== "function") {
+        this.message = "宿主未提供创建通道，无法创建 Agent";
+        return;
+      }
+      this.busy = true;
+      this.message = `正在创建 CodeAgent 处理 ${kind} #${number}（${dir}）…`;
+      try {
+        const prefill = {
+          agentType: "code_agent",
+          workingDir: dir,
+          task: this.buildItemPrompt(item),
+          name: `${kind} #${number}`,
+          nodeId: this.nodeId,
+        };
+        if (typeof openModal === "function") {
+          const res = await openModal(prefill);
+          if (res && res.confirmed) {
+            this.message = `已创建 CodeAgent 处理 ${kind} #${number}（${dir}）`;
+          } else {
+            this.message = "已取消";
+          }
+        } else {
+          const res = await create(prefill);
+          if (res && res.success) {
+            this.message = `已创建 CodeAgent 处理 ${kind} #${number}（${dir}）`;
+          } else {
+            this.message = "失败: " + ((res && res.error) || "创建失败");
+          }
+        }
+      } catch (e) {
+        this.message = "失败: " + String((e && e.message) || e);
+      } finally {
+        this.busy = false;
+      }
+    },
     // ---- 写操作 ----
     async postComment() {
       const body = (this.commentText || "").trim();
@@ -1008,6 +1237,20 @@ export default {
         <button @click="useCurrentDirRepo" style="padding:4px 8px;background:#333;color:#ddd;border:none;border-radius:4px;cursor:pointer;font-size:11px;">跟随当前目录</button>
         <button @click="repoEditing = false" style="padding:4px 8px;background:#333;color:#ddd;border:none;border-radius:4px;cursor:pointer;font-size:11px;">取消</button>
       </div>
+      <!-- 使用本地已 clone 目录作为目标仓库（跳过 Fork + Clone） -->
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid #333;">
+        <div style="font-size:11px;color:#888;margin-bottom:4px;">使用本地目录（已 clone 的 git 仓库，跳过 Fork）</div>
+        <div style="display:flex;gap:6px;">
+          <input v-model="localDirInput" type="text" placeholder="如 /home/user/projects/my-repo"
+            @keydown.enter.prevent="useLocalDir"
+            style="flex:1;min-width:0;padding:5px 8px;background:#1e1e1e;color:#ddd;border:1px solid #444;border-radius:4px;font-size:12px;">
+          <button @click="pickLocalDir" title="选择本地目录"
+            style="padding:5px 10px;background:#333;color:#ddd;border:none;border-radius:4px;cursor:pointer;font-size:12px;">选择目录</button>
+          <button @click="useLocalDir" :disabled="busy" title="解析该本地目录为仓库"
+            style="padding:5px 10px;background:#1f6feb;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">使用</button>
+        </div>
+        <div style="font-size:10px;color:#888;margin-top:4px;">需为 git 仓库且有 origin remote；非 git 目录会给出错误提示。</div>
+      </div>
       <!-- 最近使用过的仓库：点击快速切换，无需重新输入 -->
       <div v-if="repoHistory.length" style="margin-top:8px;">
         <div style="font-size:11px;color:#888;margin-bottom:4px;">最近使用</div>
@@ -1088,12 +1331,14 @@ export default {
     <!-- 列表项右键菜单 -->
     <div v-if="menuVisible" :style="menuStyle"
       style="position:fixed;z-index:9999;background:#2d2d30;border:1px solid #454545;border-radius:6px;box-shadow:0 4px 12px #0008;padding:4px;min-width:120px;">
-      <div v-if="!isManualRepo" @click="handleItem(menuItem)"
+      <div v-if="!isManualRepo && !isLocalDirRepo" @click="handleItem(menuItem)"
         style="padding:6px 10px;font-size:12px;color:#ddd;cursor:pointer;border-radius:4px;white-space:nowrap;">在当前 Agent 中处理{{ agentName ? '（' + agentName + '）' : '' }}</div>
-      <div v-if="!isManualRepo" @click="handleItemNewAgent(menuItem)"
+      <div v-if="!isManualRepo && !isLocalDirRepo" @click="handleItemNewAgent(menuItem)"
         style="padding:6px 10px;font-size:12px;color:#ddd;cursor:pointer;border-radius:4px;white-space:nowrap;">创建新 Agent 处理</div>
-      <div v-if="!isManualRepo" @click="handleItemWorktreeAgent(menuItem)"
+      <div v-if="!isManualRepo && !isLocalDirRepo" @click="handleItemWorktreeAgent(menuItem)"
         style="padding:6px 10px;font-size:12px;color:#ddd;cursor:pointer;border-radius:4px;white-space:nowrap;">开启 Worktree 处理</div>
+      <div v-if="isLocalDirRepo" @click="handleItemLocalDirAgent(menuItem)"
+        style="padding:6px 10px;font-size:12px;color:#ddd;cursor:pointer;border-radius:4px;white-space:nowrap;">在当前目录创建 CodeAgent 处理</div>
       <div v-if="isManualRepo" @click="handleItemForkCloneAgent(menuItem)"
         style="padding:6px 10px;font-size:12px;color:#ddd;cursor:pointer;border-radius:4px;white-space:nowrap;">Fork 并创建 CodeAgent 处理</div>
     </div>
