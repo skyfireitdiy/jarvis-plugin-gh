@@ -6,3 +6,10 @@ venv/
 .env
 .DS_Store
 node_modules/
+
+# 安装元数据（由 Jarvis 安装/升级时生成，不入库）
+.git-branch
+.source
+
+# 本地会话数据
+.jarvis/

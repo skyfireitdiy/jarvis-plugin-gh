@@ -766,6 +766,8 @@ export default {
         return;
       }
       const number = item.number;
+      const isIssue = this.tab === "issues";
+      const kind = isIssue ? "Issue" : "Pull Request";
       const pick =
         typeof window !== "undefined" && window.__jarvisPickDirectoryWithNode;
       // 优先使用「打开创建 Agent 弹窗（带预填）」通道；宿主未提供时回退到直接创建通道。
@@ -807,20 +809,20 @@ export default {
           agentType: "code_agent",
           workingDir: localDir,
           task: this.buildItemPrompt(item, true),
-          name: `Issue #${number}`,
+          name: `${kind} #${number}`,
           nodeId: targetNode,
         };
         if (typeof openModal === "function") {
           const res = await openModal(prefill);
           if (res && res.confirmed) {
-            this.message = `已创建 CodeAgent 处理 Issue #${number}（${localDir}）`;
+            this.message = `已创建 CodeAgent 处理 ${kind} #${number}（${localDir}）`;
           } else {
             this.message = "已取消";
           }
         } else {
           const res = await create(prefill);
           if (res && res.success) {
-            this.message = `已创建 CodeAgent 处理 Issue #${number}（${localDir}）`;
+            this.message = `已创建 CodeAgent 处理 ${kind} #${number}（${localDir}）`;
           } else {
             this.message = "失败: " + ((res && res.error) || "创建失败");
           }
