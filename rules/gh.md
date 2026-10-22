@@ -186,13 +186,25 @@ gh 插件默认处理**当前工作目录对应的仓库**（读取 git remote o
 ### 标准流程
 
 1. **确认基线**：先 `git fetch origin` 并确认当前主干（默认 `main`）状态，避免基于过期历史。
-2. **（外部贡献者）Fork 仓库**：无写权限时先 `gh repo fork <owner>/<repo> --clone=false`，再手动 `git clone https://github.com/<你的账号>/<repo>.git`（fork 会成为 `origin`），并 `git remote add upstream https://github.com/<owner>/<repo>.git` 把原仓库设为 `upstream`。有写权限时跳过本步。
+2. **（外部贡献者）Fork 仓库**：无写权限时先 `gh repo fork <owner>/<repo> --clone=false`，再手动 `git clone git@github.com:<你的账号>/<repo>.git`（fork 会成为 `origin`，SSH 便于后续推送），并 `git remote add upstream git@github.com:<owner>/<repo>.git` 把原仓库设为 `upstream`。有写权限时跳过本步。
 3. **建特性分支**：从主干切出语义化命名的分支，如 `feat/<主题>`、`fix/<主题>`、`docs/<主题>`。
 4. **在分支上完成改动并提交**：改动完成后调用 `commit` 工具生成正式提交（见上节）。
 5. **推送分支**：`git push -u origin <分支名>`。
 6. **创建 PR**：用 `gh pr create --base main --head <分支名> --title <标题> --body-file <描述文件>` 创建 PR，描述需包含：背景、改动清单、验证方式。
 7. **关联 Issue**：若该 PR 解决某个 Issue，在 PR 描述中用 `Closes #<编号>` 关联（合并后自动关闭）；不要在处理过程中提前手动关闭 Issue。
 8. **收尾汇报**：向用户汇报 PR 链接与状态。
+
+### 推送协议（GitHub 必须走 SSH）
+
+**GitHub 已不支持 HTTPS 密码/token 推送代码**（2021-08-13 起移除密码认证，HTTPS 推送仅接受 PAT 且体验差），因此**所有 GitHub 仓库的 `git push` 一律使用 SSH**。Gitee 不受此限制，可按需选择 HTTPS 或 SSH。
+
+- **GitHub 推送前先确认 remote**：`git remote -v` 检查 push URL。若 push URL 是 `https://github.com/...`，先改为 SSH（只改 push，保留 fetch 用 HTTPS 亦可）：
+  ```bash
+  git remote set-url --push origin git@github.com:<owner>/<repo>.git
+  ```
+- **SSH 认证检查**：`ssh -T git@github.com` 应返回 `Hi <用户名>! You've successfully authenticated...`。若未配置 SSH key，引导用户生成并添加：`ssh-keygen -t ed25519 -C "<邮箱>"` → 将 `~/.ssh/id_ed25519.pub` 添加到 GitHub → Settings → SSH and GPG keys。
+- **推送命令不变**：改好 push URL 后，`git push -u origin <分支名>` 直接走 SSH。
+- **不要**因 GitHub 推送失败就改用 `gh auth login` 的 token 走 HTTPS 推送；GitHub 场景的推送一律 SSH。
 
 ### Fork 他人仓库处理其 Issue（gh 插件「Fork 并创建 CodeAgent」场景）
 
