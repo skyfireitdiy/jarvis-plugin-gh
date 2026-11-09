@@ -13,3 +13,9 @@ node_modules/
 
 # 本地会话数据
 .jarvis/
+
+# Reversa
+.reversa/config.user.toml
+_reversa_sdd/
+.reversa
+.agents
